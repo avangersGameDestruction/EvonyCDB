@@ -946,6 +946,14 @@ namespace EvonyCDB
             };
             if (checkedListBox1.Items.Count == 0)
                 checkedListBox1.Items.AddRange(monsters);
+
+            comboBox2.Items.Clear();
+            comboBox2.Items.AddRange(new object[]
+            {
+                "Warlord", "Pan", "Kraken", "Azazel", "Sphinx",
+                "Cerberus", "Stymphalian Bird", "Ymir", "Ammit"
+            });
+            comboBox2.SelectedIndex = 0;
         }
 
         // =================== ProcessFinder helper ===================
@@ -1115,14 +1123,92 @@ namespace EvonyCDB
         [StructLayout(LayoutKind.Sequential)] private struct RECT { public int Left, Top, Right, Bottom; }
         [StructLayout(LayoutKind.Sequential)] private struct POINT { public int X, Y; }
 
+        private static readonly Regex MonsterLineRegex =
+        new Regex(@"^\s*Lv\s*(\d+)\s+([^(]+?)\s*(?:\(|$)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
         private void Sortbtn_Click(object sender, EventArgs e)
         {
+            var cmp = StringComparison.OrdinalIgnoreCase;
+            string priority = comboBox2.SelectedItem?.ToString()?.Trim();
 
+            // Parse all lines
+            var lines = SortMonstersrichtextbox.Lines
+                .Where(l => !string.IsNullOrWhiteSpace(l))
+                .ToList();
+
+            var parsed = new List<MonsterEntry>(lines.Count);
+            var leftovers = new List<string>();
+
+            foreach (var line in lines)
+            {
+                var entry = TryParseMonster(line);
+                if (entry != null) parsed.Add(entry);
+                else leftovers.Add(line); // keep lines we couldn't parse
+            }
+
+            // Split by priority
+            var priorityGroup = parsed
+                .Where(e => IsPriority(e.Name, priority, cmp))
+                .OrderByDescending(e => e.Level)
+                .ToList();
+
+            // Others grouped by name (A→Z), each group by level desc
+            var otherOrdered = parsed
+                .Where(e => !IsPriority(e.Name, priority, cmp))
+                .GroupBy(e => e.Name, StringComparer.OrdinalIgnoreCase)
+                .OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase)
+                .SelectMany(g => g.OrderByDescending(e => e.Level))
+                .ToList();
+
+            // Combine: priority first, then the rest
+            var finalList = new List<string>(parsed.Count + leftovers.Count);
+            finalList.AddRange(priorityGroup.Select(e => e.OriginalLine));
+            finalList.AddRange(otherOrdered.Select(e => e.OriginalLine));
+
+            // If you want to keep unparsed lines, you can append them at the end (optional)
+            // finalList.AddRange(leftovers);
+
+            CoordsRichTextBox.Text = string.Join(Environment.NewLine, finalList);
         }
 
         private void clearbtn_Click(object sender, EventArgs e)
         {
             SortMonstersrichtextbox.Clear();
+        }
+
+        private sealed class MonsterEntry
+        {
+            public int Level { get; set; }
+            public string Name { get; set; } = "";
+            public string OriginalLine { get; set; } = "";
+        }
+
+        private MonsterEntry TryParseMonster(string line)
+        {
+            if (string.IsNullOrWhiteSpace(line)) return null;
+            var m = MonsterLineRegex.Match(line);
+            if (!m.Success) return null;
+
+            if (!int.TryParse(m.Groups[1].Value, out int level)) return null;
+
+            // Normalize the name a bit: trim & collapse internal spaces
+            string rawName = m.Groups[2].Value.Trim();
+            string name = Regex.Replace(rawName, @"\s+", " ");
+
+            return new MonsterEntry
+            {
+                Level = level,
+                Name = name,
+                OriginalLine = line
+            };
+        }
+
+        private bool IsPriority(string monsterName, string priority, StringComparison cmp)
+        {
+            if (string.IsNullOrWhiteSpace(priority)) return false;
+
+            // Match if equal or starts with (so "Pan" also catches "Pan Cavalry", etc.)
+            return monsterName.Equals(priority, cmp) || monsterName.StartsWith(priority + " ", cmp);
         }
 
         // ====== Verification template pool (keep tight for speed) ======
